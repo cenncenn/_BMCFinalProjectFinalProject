@@ -14,12 +14,26 @@ class _AdminOrderScreenState extends State<AdminOrderScreen> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   // 2. This is the function that updates the status in Firestore
-  Future<void> _updateOrderStatus(String orderId, String newStatus) async {
+  Future<void> _updateOrderStatus(String orderId, String newStatus, String userId) async {
     try {
-      // 3. Find the document and update the 'status' field
+      // 2. This part is the same (update the order)
       await _firestore.collection('orders').doc(orderId).update({
         'status': newStatus,
       });
+
+      // 3. --- ADD THIS NEW LOGIC ---
+      //    Create a new notification document
+      await _firestore.collection('notifications').add({
+        'userId': userId, // 4. The user this notification is for
+        'title': 'Order Status Updated',
+        'body': 'Your order ($orderId) has been updated to "$newStatus".',
+        'orderId': orderId,
+        'createdAt': FieldValue.serverTimestamp(),
+        'isRead': false, // 5. Mark it as unread
+      });
+      // --- END OF NEW LOGIC ---
+
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Order status updated!')),
       );
@@ -30,43 +44,34 @@ class _AdminOrderScreenState extends State<AdminOrderScreen> {
     }
   }
 
+
   // 4. This function shows the update dialog
-  void _showStatusDialog(String orderId, String currentStatus) {
+  void _showStatusDialog(String orderId, String currentStatus, String userId) {
     showDialog(
       context: context,
-      builder: (context) {
+      builder: (dialogContext) {
         // 5. A list of all possible statuses
-        const statuses = [
-          'Pending',
-          'Processing',
-          'Shipped',
-          'Delivered',
-          'Cancelled'
-        ];
+        const statuses = ['Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled'];
 
         return AlertDialog(
           title: const Text('Update Order Status'),
           content: Column(
-            mainAxisSize: MainAxisSize.min, // Make the dialog small
+            mainAxisSize: MainAxisSize.min,
             children: statuses.map((status) {
-              // 6. Create a button for each status
               return ListTile(
                 title: Text(status),
-                // 7. Show a checkmark next to the current status
-                trailing: currentStatus == status
-                    ? const Icon(Icons.check)
-                    : null,
+                trailing: currentStatus == status ? const Icon(Icons.check) : null,
                 onTap: () {
-                  // 8. When tapped:
-                  _updateOrderStatus(orderId, status); // Call update
-                  Navigator.of(context).pop(); // Close the dialog
+                  _updateOrderStatus(orderId, status, userId);
+                  Navigator.of(dialogContext).pop();
                 },
               );
             }).toList(),
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(context).pop(),
+              // 3. FIX: Use 'dialogContext' to pop here too
+              onPressed: () => Navigator.of(dialogContext).pop(),
               child: const Text('Close'),
             )
           ],
@@ -74,6 +79,7 @@ class _AdminOrderScreenState extends State<AdminOrderScreen> {
       },
     );
   }
+  // --- END OF FIX ---
 
   @override
   Widget build(BuildContext context) {
@@ -107,19 +113,23 @@ class _AdminOrderScreenState extends State<AdminOrderScreen> {
             itemCount: orders.length,
             itemBuilder: (context, index) {
               final order = orders[index];
+              // --- NULL-SAFE DATA HANDLING ---
+              // This prevents crashes if data is missing
               final orderData = order.data() as Map<String, dynamic>;
 
-              // 5. Format the date (same as OrderCard)
-              final Timestamp timestamp = orderData['createdAt'];
-              final String formattedDate = DateFormat('MM/dd/yyyy hh:mm a')
-                  .format(timestamp.toDate());
+              final Timestamp? timestamp = orderData['createdAt'];
+              final String formattedDate = timestamp != null
+                  ? DateFormat('MM/dd/yyyy hh:mm a').format(timestamp.toDate())
+                  : 'No date';
 
-              // 6. Get the current status
-              final String status = orderData['status'];
+              final String status = orderData['status'] ?? 'Unknown';
+              final double totalPrice = (orderData['totalPrice'] ?? 0.0) as double;
+              final String formattedTotal = '₱${totalPrice.toStringAsFixed(2)}';
+              final String userId = orderData['userId'] ?? 'Unknown User';
+              // --- END OF NULL-SAFE DATA HANDLING ---
 
-              // 7. Build a Card for each order
               return Card(
-                margin: const EdgeInsets.all(8.0),
+              margin: const EdgeInsets.all(8.0),
                 child: ListTile(
                   title: Text(
                     'Order ID: ${order.id}', // Show the doc ID
@@ -145,7 +155,7 @@ class _AdminOrderScreenState extends State<AdminOrderScreen> {
                       ),
                     ),
                     backgroundColor: status == 'Pending'
-                        ? Colors.orange
+                        ? Colors.yellow
                         : status == 'Processing'
                         ? Colors.blue
                         : status == 'Shipped'
@@ -154,10 +164,8 @@ class _AdminOrderScreenState extends State<AdminOrderScreen> {
                         ? Colors.green
                         : Colors.red,
                   ),
-
-                  // 9. On tap, show our update dialog
                   onTap: () {
-                    _showStatusDialog(order.id, status);
+                    _showStatusDialog(order.id, status, userId);
                   },
                 ),
               );
